@@ -1,3 +1,4 @@
+[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/niyrme/cbz-maker/main.svg)](https://results.pre-commit.ci/latest/github/niyrme/cbz-maker/main)
 # cbzMaker
 
 Create `.cbz` (Comic Book ZIP) archives from images.
