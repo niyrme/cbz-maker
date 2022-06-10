@@ -11,6 +11,33 @@ use zip::ZipWriter;
 const SRC_PATH: &str = "./cbzMaker/src";
 const OUT_PATH: &str = "./cbzMaker/out";
 
+macro_rules! log {
+	($level:expr, $msg:expr) => {
+		println!("[{}] {}", $level, $msg)
+	};
+}
+macro_rules! info {
+	($msg:expr) => {
+		log!("INFO", $msg);
+	};
+}
+macro_rules! error {
+	($msg:expr) => {
+		log!("ERROR", $msg);
+	};
+}
+
+macro_rules! getOrErrorContinue {
+	($res:expr, $msg:expr) => {
+		if let Some(v) = $res {
+			v
+		} else {
+			error!($msg);
+			continue;
+		}
+	};
+}
+
 fn main() -> std::io::Result<()> {
 	fs::create_dir_all(SRC_PATH)?;
 	fs::create_dir_all(OUT_PATH)?;
@@ -22,7 +49,7 @@ fn main() -> std::io::Result<()> {
 			.into_iter()
 			.filter_map(|e| {
 				if e.is_err() {
-					println!("[ERROR] {:?}", &e);
+					error!(format!("{:?}", &e));
 				}
 				e.ok()
 			})
@@ -35,29 +62,37 @@ fn main() -> std::io::Result<()> {
 			continue;
 		}
 
-		let entryPathStr = entryPath.to_str().unwrap();
-		let entryName = entryPathStr.get(SRC_PATH.len() + 1..).unwrap();
+		let entryPathStr = getOrErrorContinue!(entryPath.to_str(), "failed to convert entry path to string");
+		let entryName = getOrErrorContinue!(entryPathStr.get(SRC_PATH.len() + 1..), "failed to get entry name from path");
 
-		println!("Creating: {}", entryName);
+		info!(format!("Creating: {}", entryName));
 
-		for chap in iterPath(entryPathStr) {
+		'chapterLoop: for chap in iterPath(entryPathStr) {
 			let chapPath = chap.path();
 			if !chapPath.is_dir() {
 				continue;
 			}
 
-			let chapPathStr = chapPath.to_str().unwrap();
-			let chapName = chapPathStr.get(entryPathStr.len() + 1..).unwrap();
+			let chapPathStr = getOrErrorContinue!(chapPath.to_str(), "failed to convert chapter path to string");
 
-			println!("   Creating Chapter: {}", chapName);
+			// let chapPathStr = chapPath.to_str().unwrap();
+			let chapName = getOrErrorContinue!(chapPathStr.get(entryPathStr.len() + 1..), "failed to get name from chapter");
+
+			info!(format!("   Creating Chapter: {}", chapName));
 
 			let outPath = format!("{}/{}", OUT_PATH, entryName);
 			let outCBZ = format!("{}/{} {}.cbz", outPath, entryName, chapName);
 
 			fs::create_dir_all(outPath)?;
-			let f = File::create(outCBZ)?;
+			let cbzF = match File::create(outCBZ) {
+				Ok(v) => v,
+				Err(e) => {
+					error!(format!("failed to create cbz file: {}", e));
+					continue;
+				}
+			};
 
-			let mut zip = ZipWriter::new(f);
+			let mut zip = ZipWriter::new(cbzF);
 
 			let pages: Vec<_> = iterPath(chapPathStr).collect();
 			let pLen = pages.len();
@@ -69,31 +104,78 @@ fn main() -> std::io::Result<()> {
 			for page in pages.iter() {
 				let pagePath = page.path();
 				if !pagePath.is_file() {
-					continue;
+					continue 'chapterLoop;
 				}
 
 				i += 1;
 
-				let pageExt = pagePath.extension().unwrap().to_str().unwrap();
+				let pageExt = getOrErrorContinue!(
+					pagePath.extension().and_then(|e| e.to_str()),
+					"failed to get extension from file"
+				);
 
-				File::open(pagePath)?.read_to_end(&mut buf)?;
+				let mut pageF = match File::open(pagePath) {
+					Ok(f) => f,
+					Err(e) => {
+						error!(format!("failed to open image file: {}", e));
+						continue 'chapterLoop;
+					}
+				};
 
-				zip.start_file(
+				match pageF.read_to_end(&mut buf) {
+					Ok(_) => {}
+					Err(e) => {
+						error!(format!("failed to read image file: {}", e));
+						continue 'chapterLoop;
+					}
+				};
+
+				if buf.is_empty() {
+					error!("something went wrong, buffer is empty");
+					continue 'chapterLoop;
+				}
+
+				match zip.start_file(
 					format!("{:0width$}.{ext}", i, width = pLen, ext = pageExt),
 					Default::default(),
-				)?;
-				zip.write_all(&*buf)?;
+				) {
+					Ok(_) => {}
+					Err(e) => {
+						error!(format!("failed to start zip file: {}", e));
+						continue 'chapterLoop;
+					}
+				};
+
+				match zip.write_all(&*buf) {
+					Ok(_) => {}
+					Err(e) => {
+						error!(format!("failed to write to zip file: {}", e));
+						continue 'chapterLoop;
+					}
+				}
 
 				buf.clear();
 			}
 
-			File::create(format!("{}/{}/.nomedia", OUT_PATH, entryName))?;
+			match File::create(format!("{}/{}/.nomedia", OUT_PATH, entryName)) {
+				Ok(_) => {}
+				Err(e) => {
+					error!(format!("failed to create .nomedia file: {}", e));
+				}
+			};
 
-			zip.finish()?;
+			match zip.finish() {
+				Ok(_) => {}
+				Err(e) => {
+					error!(format!("failed to finish archive: {}", e));
+				}
+			}
 		}
 
 		println!("");
 	}
+
+	info!("done!");
 
 	Ok(())
 }
