@@ -1,0 +1,23 @@
+version = "Two"
+unstable_features = true
+
+color = "Always"
+
+brace_style = "PreferSameLine"
+indent_style = "Block"
+newline_style = "Unix"
+hard_tabs = true
+fn_single_line = true
+enum_discrim_align_threshold = 12
+struct_field_align_threshold = 12
+match_block_trailing_comma = false
+max_width = 128  # don't really care about long lines
+reorder_impl_items = true
+overflow_delimited_expr = true
+use_field_init_shorthand = true
+
+imports_layout = "HorizontalVertical"
+group_imports = "StdExternalCrate"
+
+report_fixme = "Unnumbered"
+report_todo = "Unnumbered"
