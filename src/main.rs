@@ -5,29 +5,24 @@ use std::{
 	io::{Read, Write},
 };
 
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 use zip::ZipWriter;
 
 const SRC_PATH: &str = "./cbzMaker/src";
 const OUT_PATH: &str = "./cbzMaker/out";
 
-macro_rules! log {
-	($level:expr, $msg:expr) => {
-		println!("[{}] {}", $level, $msg)
-	};
-}
 macro_rules! info {
 	($msg:expr) => {
-		log!("INFO", $msg);
+		println!("[INFO] {}", $msg)
 	};
 }
 macro_rules! error {
 	($msg:expr) => {
-		log!("ERROR", $msg);
+		eprintln!("[ERROR] {}", $msg)
 	};
 }
 
-macro_rules! getOrErrorContinue {
+macro_rules! getSomeOrErrorContinue {
 	($res:expr, $msg:expr) => {
 		if let Some(v) = $res {
 			v
@@ -37,12 +32,72 @@ macro_rules! getOrErrorContinue {
 		}
 	};
 }
+macro_rules! getOkOrErrorContinue {
+	($res:expr, $errMsg:expr) => {
+		match $res {
+			Ok(v) => v,
+			Err(e) => {
+				error!(format!("{}: {}", $errMsg, e));
+				continue;
+			}
+		}
+	};
+}
+
+#[derive(Debug)]
+struct Details {
+	title:        String,
+	author:       String,
+	artist:       String,
+	description:  String,
+	genre:        Vec<String>,
+	status:       String,
+	statusValues: Vec<String>,
+}
+
+impl Details {
+	fn barebone(title: String) -> Self {
+		Self {
+			title,
+			author: String::new(),
+			artist: String::new(),
+			description: String::new(),
+			genre: Vec::new(),
+			status: String::from("0"),
+			statusValues: vec![
+				String::from("0 = Unknown"),
+				String::from("1 = Ongoing"),
+				String::from("2 = Completed"),
+				String::from("3 = Licensed"),
+			],
+		}
+	}
+}
+
+impl ToString for Details {
+	fn to_string(&self) -> String {
+		String::from(format!(
+			"{{
+	\"title\": \"{}\",
+	\"author\": \"{}\",
+	\"artist\": \"{}\",
+	\"description\": \"{}\",
+	\"genre\": {:?},
+	\"status\": \"{}\",
+	\"_status values\": {:?}
+}}",
+			self.title, self.author, self.artist, self.description, self.genre, self.status, self.statusValues
+		))
+	}
+}
+
+fn isDir(entry: &DirEntry) -> bool { entry.path().is_dir() }
 
 fn main() -> std::io::Result<()> {
 	fs::create_dir_all(SRC_PATH)?;
 	fs::create_dir_all(OUT_PATH)?;
 
-	let iterPath = |path: &str| {
+	let iterPath = |path: &str, filter: fn(&DirEntry) -> bool| {
 		WalkDir::new(path)
 			.max_depth(1)
 			.contents_first(false)
@@ -54,48 +109,37 @@ fn main() -> std::io::Result<()> {
 				e.ok()
 			})
 			.skip(1)
+			.filter(filter)
 	};
 
-	for entry in iterPath(SRC_PATH) {
+	for entry in iterPath(SRC_PATH, isDir) {
 		let entryPath = entry.path();
-		if !entryPath.is_dir() {
-			continue;
-		}
-
-		let entryPathStr = getOrErrorContinue!(entryPath.to_str(), "failed to convert entry path to string");
-		let entryName = getOrErrorContinue!(entryPathStr.get(SRC_PATH.len() + 1..), "failed to get entry name from path");
+		let entryPathStr = getSomeOrErrorContinue!(entryPath.to_str(), "failed to convert entry path to string");
+		let entryName = getSomeOrErrorContinue!(entryPathStr.get(SRC_PATH.len() + 1..), "failed to get entry name from path");
 
 		info!(format!("Creating: {}", entryName));
 
-		'chapterLoop: for chap in iterPath(entryPathStr) {
-			let chapPath = chap.path();
-			if !chapPath.is_dir() {
-				continue;
-			}
+		let entryOutPath = format!("{}/{}", OUT_PATH, &entryName);
+		fs::create_dir_all(&entryOutPath)?;
 
-			let chapPathStr = getOrErrorContinue!(chapPath.to_str(), "failed to convert chapter path to string");
+		'chapterLoop: for chapter in iterPath(entryPathStr, isDir) {
+			let chapterPath = chapter.path();
+			let chapterPathStr = getSomeOrErrorContinue!(chapterPath.to_str(), "failed to convert chapter path to string");
+			let chapterName = getSomeOrErrorContinue!(
+				chapterPathStr.get(entryPathStr.len() + 1..),
+				"failed to get name from chapter"
+			);
 
-			// let chapPathStr = chapPath.to_str().unwrap();
-			let chapName = getOrErrorContinue!(chapPathStr.get(entryPathStr.len() + 1..), "failed to get name from chapter");
+			info!(format!("   Creating Chapter: {}", chapterName));
 
-			info!(format!("   Creating Chapter: {}", chapName));
+			let entryOutCBZ = format!("{}/{} {}.cbz", &entryOutPath, &entryName, &chapterName);
 
-			let outPath = format!("{}/{}", OUT_PATH, entryName);
-			let outCBZ = format!("{}/{} {}.cbz", outPath, entryName, chapName);
+			let cbzFile = getOkOrErrorContinue!(File::create(entryOutCBZ), "failed to create cbz file");
 
-			fs::create_dir_all(outPath)?;
-			let cbzF = match File::create(outCBZ) {
-				Ok(v) => v,
-				Err(e) => {
-					error!(format!("failed to create cbz file: {}", e));
-					continue;
-				}
-			};
+			let mut zipWriter = ZipWriter::new(cbzFile);
 
-			let mut zip = ZipWriter::new(cbzF);
-
-			let pages: Vec<_> = iterPath(chapPathStr).collect();
-			let pLen = pages.len();
+			let pages: Vec<_> = iterPath(chapterPathStr, |entry| entry.path().is_file()).collect();
+			let pageCount = pages.len();
 
 			let mut i = 0;
 
@@ -103,18 +147,18 @@ fn main() -> std::io::Result<()> {
 
 			for page in pages.iter() {
 				let pagePath = page.path();
-				if !pagePath.is_file() {
-					continue 'chapterLoop;
-				}
 
 				i += 1;
 
-				let pageExt = getOrErrorContinue!(
-					pagePath.extension().and_then(|e| e.to_str()),
-					"failed to get extension from file"
-				);
+				let pageExt = match pagePath.extension().and_then(|e| e.to_str()) {
+					Some(v) => v,
+					None => {
+						error!("failed to get extension from file");
+						continue 'chapterLoop;
+					}
+				};
 
-				let mut pageF = match File::open(pagePath) {
+				let mut pageFile = match File::open(pagePath) {
 					Ok(f) => f,
 					Err(e) => {
 						error!(format!("failed to open image file: {}", e));
@@ -122,60 +166,69 @@ fn main() -> std::io::Result<()> {
 					}
 				};
 
-				match pageF.read_to_end(&mut buf) {
-					Ok(_) => {}
-					Err(e) => {
-						error!(format!("failed to read image file: {}", e));
-						continue 'chapterLoop;
-					}
-				};
+				if let Err(e) = pageFile.read_to_end(&mut buf) {
+					error!(format!("failed to read image file: {}", e));
+					continue 'chapterLoop;
+				}
 
 				if buf.is_empty() {
 					error!("something went wrong, buffer is empty");
 					continue 'chapterLoop;
 				}
 
-				match zip.start_file(
-					format!("{:0width$}.{ext}", i, width = pLen, ext = pageExt),
-					Default::default(),
-				) {
-					Ok(_) => {}
-					Err(e) => {
-						error!(format!("failed to start zip file: {}", e));
-						continue 'chapterLoop;
-					}
+				let pageName = format!("{:0width$}.{ext}", i, width = pageCount, ext = pageExt);
+				if let Err(e) = zipWriter.start_file(pageName, Default::default()) {
+					error!(format!("failed to start zip file: {}", e));
+					continue 'chapterLoop;
 				};
 
-				match zip.write_all(&*buf) {
-					Ok(_) => {}
-					Err(e) => {
-						error!(format!("failed to write to zip file: {}", e));
-						continue 'chapterLoop;
-					}
+				if let Err(e) = zipWriter.write_all(&*buf) {
+					error!(format!("failed to write to zip file: {}", e));
+					continue 'chapterLoop;
 				}
 
 				buf.clear();
 			}
 
-			match File::create(format!("{}/{}/.nomedia", OUT_PATH, entryName)) {
-				Ok(_) => {}
-				Err(e) => {
-					error!(format!("failed to create .nomedia file: {}", e));
-				}
-			};
-
-			match zip.finish() {
-				Ok(_) => {}
-				Err(e) => {
-					error!(format!("failed to finish archive: {}", e));
-				}
+			if let Err(e) = zipWriter.finish() {
+				error!(format!("failed to finish archive: {}", e));
 			}
 		}
+
+		// create .nomedia
+		if let Err(e) = File::create(format!("{}/.nomedia", &entryOutPath)) {
+			error!(format!("failed to create .nomedia file: {}", e));
+		}
+
+		match File::create(format!("{}/details.json", &entryOutPath)) {
+			Ok(mut detailsF) => match File::open(format!("{}/details.json", &entryPathStr)) {
+				Ok(mut f) => {
+					// copy details.json
+					let mut buf = Vec::new();
+					if let Err(e) = f.read_to_end(&mut buf) {
+						error!(format!("failed to read source details.json: {}", e))
+					} else if let Err(e) = detailsF.write_all(&mut buf) {
+						error!(format!("failed to write to destination details.json: {}", e))
+					} else {
+						info!("   Copied over details.json")
+					}
+				}
+				Err(_) => {
+					// create details.json
+					let details = Details::barebone(entryName.to_string());
+					match detailsF.write_all(details.to_string().as_bytes()) {
+						Ok(_) => info!("   Created barebone details.json"),
+						Err(e) => error!(format!("failed to create details.json {}", e)),
+					}
+				}
+			},
+			Err(e) => error!(format!("failed to create/copy details.json file: {}", e)),
+		};
 
 		println!("");
 	}
 
-	info!("done!");
+	info!("Done!");
 
 	Ok(())
 }
