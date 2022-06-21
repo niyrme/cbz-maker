@@ -2,96 +2,17 @@
 
 use std::{
 	fs::{self, File},
-	io::{Read, Write},
+	io::{ErrorKind, Read, Write},
 };
 
+use cbzmaker::{error, getOkOrErrorContinue, getSomeOrErrorContinue, info, Details};
 use walkdir::{DirEntry, WalkDir};
 use zip::ZipWriter;
 
 const SRC_PATH: &str = "./cbzMaker/src";
 const OUT_PATH: &str = "./cbzMaker/out";
 
-macro_rules! info {
-	($msg:expr) => {
-		println!("[INFO] {}", $msg)
-	};
-}
-macro_rules! error {
-	($msg:expr) => {
-		eprintln!("[ERROR] {}", $msg)
-	};
-}
-
-macro_rules! getSomeOrErrorContinue {
-	($res:expr, $msg:expr) => {
-		if let Some(v) = $res {
-			v
-		} else {
-			error!($msg);
-			continue;
-		}
-	};
-}
-macro_rules! getOkOrErrorContinue {
-	($res:expr, $errMsg:expr) => {
-		match $res {
-			Ok(v) => v,
-			Err(e) => {
-				error!(format!("{}: {}", $errMsg, e));
-				continue;
-			}
-		}
-	};
-}
-
-#[derive(Debug)]
-struct Details {
-	title:        String,
-	author:       String,
-	artist:       String,
-	description:  String,
-	genre:        Vec<String>,
-	status:       String,
-	statusValues: Vec<String>,
-}
-
-impl Details {
-	fn barebone(title: String) -> Self {
-		Self {
-			title,
-			author: String::new(),
-			artist: String::new(),
-			description: String::new(),
-			genre: Vec::new(),
-			status: String::from("0"),
-			statusValues: vec![
-				String::from("0 = Unknown"),
-				String::from("1 = Ongoing"),
-				String::from("2 = Completed"),
-				String::from("3 = Licensed"),
-			],
-		}
-	}
-}
-
-impl ToString for Details {
-	fn to_string(&self) -> String {
-		String::from(format!(
-			"{{
-	\"title\": \"{}\",
-	\"author\": \"{}\",
-	\"artist\": \"{}\",
-	\"description\": \"{}\",
-	\"genre\": {:?},
-	\"status\": \"{}\",
-	\"_status values\": {:?}
-}}",
-			self.title, self.author, self.artist, self.description, self.genre, self.status, self.statusValues
-		))
-	}
-}
-
-fn isDir(entry: &DirEntry) -> bool { entry.path().is_dir() }
+pub fn isDir(entry: &DirEntry) -> bool { entry.path().is_dir() }
 
 fn main() -> std::io::Result<()> {
 	fs::create_dir_all(SRC_PATH)?;
@@ -213,12 +134,16 @@ fn main() -> std::io::Result<()> {
 						info!("   Copied over details.json")
 					}
 				}
-				Err(_) => {
-					// create details.json
-					let details = Details::barebone(entryName.to_string());
-					match detailsF.write_all(details.to_string().as_bytes()) {
-						Ok(_) => info!("   Created barebone details.json"),
-						Err(e) => error!(format!("failed to create details.json {}", e)),
+				Err(e) => {
+					if e.kind().eq(&ErrorKind::NotFound) {
+						// create details.json
+						let details = Details::barebone(entryName.to_string());
+						match detailsF.write_all(serde_json::to_string_pretty(&details)?.as_bytes()) {
+							Ok(_) => info!("   Created barebone details.json"),
+							Err(e) => error!(format!("failed to create details.json {}", e)),
+						}
+					} else {
+						error!(format!("   Failed to read source details.json: {}", e))
 					}
 				}
 			},
