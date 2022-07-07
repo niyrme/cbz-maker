@@ -5,39 +5,28 @@ use serde::Serialize;
 #[macro_export]
 macro_rules! info {
 	($msg:expr) => {
-		println!("[INFO] {}", $msg)
+		print!("[INFO] {}", $msg)
+	};
+}
+
+#[macro_export]
+macro_rules! infoln {
+	($msg:expr) => {
+		cbzmaker::info!(format!("{}\n", $msg))
 	};
 }
 
 #[macro_export]
 macro_rules! error {
 	($msg:expr) => {
-		eprintln!("[ERROR] {}", $msg)
+		eprint!("[ERROR] {}", $msg)
 	};
 }
 
 #[macro_export]
-macro_rules! getSomeOrErrorContinue {
-	($res:expr, $msg:expr) => {
-		if let Some(v) = $res {
-			v
-		} else {
-			error!($msg);
-			continue;
-		}
-	};
-}
-
-#[macro_export]
-macro_rules! getOkOrErrorContinue {
-	($res:expr, $errMsg:expr) => {
-		match $res {
-			Ok(v) => v,
-			Err(e) => {
-				error!(format!("{}: {}", $errMsg, e));
-				continue;
-			}
-		}
+macro_rules! errorln {
+	($msg:expr) => {
+		cbzmaker::error!(format!("{}\n", $msg))
 	};
 }
 
@@ -53,29 +42,29 @@ pub struct Details {
 }
 
 impl Details {
-	pub fn new(
-		title: String,
-		author: String,
-		artist: String,
-		description: String,
+	pub fn new<T: ToString>(
+		title: T,
+		author: T,
+		artist: T,
+		description: T,
 		genre: Vec<String>,
-		status: String,
+		status: T,
 		statusValues: Vec<String>,
 	) -> Self {
 		Self {
-			title,
-			author,
-			artist,
-			description,
+			title: title.to_string(),
+			author: author.to_string(),
+			artist: artist.to_string(),
+			description: description.to_string(),
 			genre,
-			status,
+			status: status.to_string(),
 			statusValues,
 		}
 	}
 
-	pub fn barebone(title: String) -> Self {
+	pub fn barebone<T: ToString>(title: T) -> Self {
 		Self {
-			title,
+			title: title.to_string(),
 			..Default::default()
 		}
 	}

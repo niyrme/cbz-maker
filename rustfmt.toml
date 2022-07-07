@@ -18,6 +18,3 @@ use_field_init_shorthand = true
 
 imports_layout = "HorizontalVertical"
 group_imports = "StdExternalCrate"
-
-report_fixme = "Unnumbered"
-report_todo = "Unnumbered"
