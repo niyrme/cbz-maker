@@ -6,17 +6,27 @@ use std::{
 	thread,
 };
 
+use anyhow::Context;
 use cbzmaker::{errorln, log, Details};
 use futures::executor::block_on;
 use walkdir::{DirEntry, WalkDir};
 use zip::ZipWriter;
+
+macro_rules! Err {
+	($msg:expr) => {
+		Err(anyhow::Error::new(std::io::Error::new(std::io::ErrorKind::Other, $msg)))
+	};
+	($msg:expr, $kind:expr) => {
+		Err(anyhow::Error::new(std::io::Error::new($kind, $msg)))
+	};
+}
 
 const SRC_PATH: &str = "./cbzMaker/src";
 const OUT_PATH: &str = "./cbzMaker/out";
 
 pub fn isDir(entry: &DirEntry) -> bool { entry.path().is_dir() }
 
-fn makeCBZ(dirEntry: DirEntry) {
+fn makeCBZ(dirEntry: DirEntry) -> Result<(), anyhow::Error> {
 	let iterPath = |path: &str, filter: fn(&DirEntry) -> bool| {
 		WalkDir::new(path)
 			.max_depth(1)
@@ -33,28 +43,33 @@ fn makeCBZ(dirEntry: DirEntry) {
 	};
 
 	let entryPath = dirEntry.path();
-	let entryPathStr = entryPath.to_str().expect("failed to convert entry path to string");
+	let entryPathStr = entryPath
+		.to_str()
+		.with_context(|| format!("failed to convert entry path to string: {entryPath:?}"))?;
 	let entryName = entryPathStr
 		.get(SRC_PATH.len() + 1..)
-		.expect("failed to get entry name from path");
+		.with_context(|| "failed to get entry name from path")?;
 
 	log!(format!("Creating: {}", entryName));
 
 	let entryOutPath = format!("{}/{}", OUT_PATH, &entryName);
-	fs::create_dir_all(&entryOutPath).expect("failed to create entry output path");
+	fs::create_dir_all(&entryOutPath).with_context(|| format!("failed to create entry output path: {entryOutPath}"))?;
 
 	for chapter in iterPath(entryPathStr, isDir) {
 		let chapterPath = chapter.path();
-		let chapterPathStr = chapterPath.to_str().expect("failed to convert chapter path to string");
+		let chapterPathStr = chapterPath
+			.to_str()
+			.with_context(|| format!("failed to convert chapter path to string: {chapterPath:?}"))?;
 		let chapterName = chapterPathStr
 			.get(entryPathStr.len() + 1..)
-			.expect("failed to get name from chapter");
+			.with_context(|| "failed to get chapter name from path")?;
 
 		log!(&entryName, &chapterName);
 
 		let entryOutCBZ = format!("{}/{} - {}.cbz", &entryOutPath, &entryName, &chapterName);
 
-		let mut zipWriter = ZipWriter::new(File::create(entryOutCBZ).expect("failed to create output ZBZ file"));
+		let zipF = File::create(&entryOutCBZ).with_context(|| format!("failed to create output CBZ file: {entryOutCBZ}"))?;
+		let mut zipWriter = ZipWriter::new(zipF);
 
 		let pages: Vec<_> = iterPath(chapterPathStr, |entry| entry.path().is_file()).collect();
 		let pageCount = pages.len();
@@ -71,65 +86,70 @@ fn makeCBZ(dirEntry: DirEntry) {
 			let pageExt = pagePath
 				.extension()
 				.and_then(|e| e.to_str())
-				.expect("failed to get extension from file");
+				.with_context(|| format!("failed to get extension from file: {pagePath:?}"))?;
 
 			File::open(pagePath)
-				.expect("failed to open chapter page")
+				.with_context(|| format!("failed to open chapter page: {pagePath:?}"))?
 				.read_to_end(&mut buf)
-				.expect("failed to read chapter page");
+				.with_context(|| format!("failed to read chapter page: {pagePath:?}"))?;
 
 			if buf.is_empty() {
-				errorln!("something went wrong, buffer is empty");
-				return;
+				return Err!("something went wrong, buffer is empty");
 			}
 
 			let pageName = format!("{:0width$}.{ext}", i, width = pageCount, ext = pageExt);
 			zipWriter
-				.start_file(pageName, Default::default())
-				.expect("failed to start new zip file");
-			zipWriter.write_all(&*buf).expect("failed to write to zip file");
+				.start_file(&pageName, Default::default())
+				.with_context(|| format!("failed to start new zip file: {pageName}"))?;
+			zipWriter.write_all(&*buf).with_context(|| "failed to write to zip file")?;
 
 			buf.clear();
 		}
 
-		zipWriter.finish().expect("failed to finish zip file");
+		zipWriter.finish().with_context(|| "failed to finish zip file")?;
 	}
 
 	// create .nomedia
-	File::create(format!("{}/.nomedia", &entryOutPath)).expect("failed to create .nomedia");
+	File::create(format!("{}/.nomedia", &entryOutPath))
+		.with_context(|| format!("failed to create file: {entryOutPath}/.nomedia"))?;
 
-	match (
+	let res = match (
 		File::create(format!("{}/details.json", &entryOutPath)),
 		File::open(format!("{}/details.json", &entryPathStr)),
 	) {
 		(Ok(mut detailsF), Ok(mut f)) => {
 			let mut buf = Vec::new();
-			f.read_to_end(&mut buf).expect("failed to read input details.json");
-			detailsF.write_all(&mut buf).expect("failed to write to ouput details.json");
+			f.read_to_end(&mut buf)
+				.with_context(|| format!("failed to read file: {entryOutPath}/details.json"))?;
+			detailsF
+				.write_all(&mut buf)
+				.with_context(|| format!("failed to write file: {entryPathStr}/details.json"))?;
 			log!(format!("{} | Copied over details.json", &entryName));
+			Ok(())
 		}
 		(Ok(mut detailsF), Err(e)) if e.kind().eq(&ErrorKind::NotFound) => {
 			let details = Details::barebone(entryName);
-			let jsn = serde_json::to_string_pretty(&details).expect("failed to convert details to json");
-			detailsF.write_all(jsn.as_bytes()).expect("failed tow rite to output.json");
+			detailsF
+				.write_all(
+					serde_json::to_string_pretty(&details)
+						.with_context(|| "failed to convert details to json")?
+						.as_bytes(),
+				)
+				.with_context(|| format!("failed to write file: {entryPathStr}/details.json"))?;
 			log!(format!("{} | Created new details.json", &entryName));
+			Ok(())
 		}
 		(Ok(_), Err(e)) => {
-			errorln!(format!("{e}"));
-			return;
-		}
-		(Err(e1), Err(e2)) => {
-			errorln!(format!("{e1}"));
-			errorln!(format!("{e2}"));
-			return;
+			Err!(format!("{e}"))
 		}
 		(Err(e), _) => {
-			errorln!(format!("{e}"));
-			return;
+			Err!(format!("{e}"))
 		}
 	};
 
 	log!(format!("{} | Done!", &entryName));
+
+	res
 }
 
 async fn amain() {
@@ -157,7 +177,15 @@ async fn amain() {
 	}
 
 	for t in threads {
-		drop(t.join());
+		match t.join() {
+			Ok(res) => match res {
+				Ok(_) => {},
+				Err(e) => {
+					errorln!(e.to_string());
+				}
+			},
+			Err(e) => todo!("{e:?}"),
+		}
 	}
 
 	log!("Done!");

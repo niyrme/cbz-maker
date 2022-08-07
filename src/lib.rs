@@ -6,7 +6,7 @@ pub use details::Details;
 #[macro_export]
 macro_rules! time {
 	() => {
-		chrono::Utc::now().format("%Y/%m/%d %H:%M:%S")
+		chrono::Local::now().format("%Y/%m/%d %H:%M:%S")
 	};
 }
 
