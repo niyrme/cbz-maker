@@ -52,6 +52,9 @@ impl Default for Details {
 				String::from("1 = Ongoing"),
 				String::from("2 = Completed"),
 				String::from("3 = Licensed"),
+				String::from("4 = Publishing finished"),
+				String::from("5 = Cancelled"),
+				String::from("6 = On hiatus"),
 			],
 		}
 	}
