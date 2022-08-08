@@ -2,7 +2,7 @@
 
 use std::{
 	fs::{self, File},
-	io::{self, ErrorKind, Read, Write},
+	io::{self, Read, Write},
 	thread,
 };
 
@@ -110,8 +110,12 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<(), anyhow::Error> {
 	}
 
 	// create .nomedia
-	File::create(format!("{}/.nomedia", &entryOutPath))
-		.with_context(|| format!("failed to create file: {entryOutPath}/.nomedia"))?;
+	// do not exit if this fails
+	if let Err(e) = File::create(format!("{}/.nomedia", &entryOutPath))
+		.with_context(|| format!("failed to create file: {entryOutPath}/.nomedia"))
+	{
+		eprintln!("{e}");
+	}
 
 	let res = match (
 		File::create(format!("{}/details.json", &entryOutPath)),
@@ -127,7 +131,7 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<(), anyhow::Error> {
 			log!(format!("{} | Copied over details.json", &entryName));
 			Ok(())
 		}
-		(Ok(mut detailsF), Err(e)) if e.kind().eq(&ErrorKind::NotFound) => {
+		(Ok(mut detailsF), Err(e)) if e.kind().eq(&io::ErrorKind::NotFound) => {
 			let details = Details::barebone(entryName);
 			detailsF
 				.write_all(
@@ -139,12 +143,8 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<(), anyhow::Error> {
 			log!(format!("{} | Created new details.json", &entryName));
 			Ok(())
 		}
-		(Ok(_), Err(e)) => {
-			Err!(format!("{e}"))
-		}
-		(Err(e), _) => {
-			Err!(format!("{e}"))
-		}
+		(Ok(_), Err(e)) => Err!(format!("{e}")),
+		(Err(e), _) => Err!(format!("{e}")),
 	};
 
 	log!(format!("{} | Done!", &entryName));
@@ -153,40 +153,35 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<(), anyhow::Error> {
 }
 
 async fn amain() {
-	fs::create_dir_all(SRC_PATH).expect("failed to create input directory");
-	fs::create_dir_all(OUT_PATH).expect("failed to create output directory");
+	[(SRC_PATH, "input"), (OUT_PATH, "output")].iter().for_each(|(path, p)| {
+		drop(
+			fs::create_dir(path)
+				.with_context(|| format!("failed to create {} directord: {}", p, path))
+				.unwrap(),
+		)
+	});
 
-	let entries: Vec<_> = WalkDir::new(SRC_PATH)
+	WalkDir::new(SRC_PATH)
 		.max_depth(1)
 		.contents_first(false)
 		.into_iter()
 		.filter_map(|res| {
-			if res.is_err() {
-				errorln!(format!("{:?}", &res));
+			if let Err(e) = &res {
+				errorln!(format!("{e:?}"));
 			}
 			res.ok()
 		})
 		.skip(1)
 		.filter(isDir)
-		.collect();
-
-	let mut threads = Vec::with_capacity(entries.len());
-
-	for entry in entries {
-		threads.push(thread::spawn(move || makeCBZ(entry)));
-	}
-
-	for t in threads {
-		match t.join() {
-			Ok(res) => match res {
-				Ok(_) => {},
-				Err(e) => {
-					errorln!(e.to_string());
+		.map(|entry| thread::spawn(move || makeCBZ(entry)))
+		.for_each(|handle| match handle.join() {
+			Ok(res) => {
+				if let Err(e) = res {
+					errorln!(&e);
 				}
-			},
+			}
 			Err(e) => todo!("{e:?}"),
-		}
-	}
+		});
 
 	log!("Done!");
 

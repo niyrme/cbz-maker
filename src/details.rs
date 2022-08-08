@@ -1,6 +1,4 @@
-use serde::Serialize;
-
-#[derive(Debug, Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct Details {
 	title:        String,
 	author:       String,
