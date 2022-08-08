@@ -158,7 +158,7 @@ async fn amain() {
 		std::process::exit(1);
 	}
 
-	WalkDir::new(SRC_PATH)
+	let entries: Vec<_> = WalkDir::new(SRC_PATH)
 		.max_depth(1)
 		.contents_first(false)
 		.into_iter()
@@ -170,15 +170,24 @@ async fn amain() {
 		})
 		.skip(1)
 		.filter(isDir)
-		.map(|entry| thread::spawn(move || makeCBZ(entry)))
-		.for_each(|handle| match handle.join() {
+		.collect();
+
+	let mut handles = Vec::with_capacity(entries.len());
+
+	for entry in entries {
+		handles.push(thread::spawn(move || makeCBZ(entry)));
+	}
+
+	for handle in handles {
+		match handle.join() {
 			Ok(res) => {
 				if let Err(e) = res {
 					errorln!(&e);
 				}
 			}
 			Err(e) => todo!("{e:?}"),
-		});
+		}
+	}
 
 	log!("Done!");
 
