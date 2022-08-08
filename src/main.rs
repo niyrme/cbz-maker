@@ -6,7 +6,7 @@ use std::{
 	thread,
 };
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use cbzmaker::{errorln, log, Details};
 use futures::executor::block_on;
 use walkdir::{DirEntry, WalkDir};
@@ -26,7 +26,7 @@ const OUT_PATH: &str = "./cbzMaker/out";
 
 pub fn isDir(entry: &DirEntry) -> bool { entry.path().is_dir() }
 
-fn makeCBZ(dirEntry: DirEntry) -> Result<(), anyhow::Error> {
+fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 	let iterPath = |path: &str, filter: fn(&DirEntry) -> bool| {
 		WalkDir::new(path)
 			.max_depth(1)
@@ -153,13 +153,10 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<(), anyhow::Error> {
 }
 
 async fn amain() {
-	[(SRC_PATH, "input"), (OUT_PATH, "output")].iter().for_each(|(path, p)| {
-		drop(
-			fs::create_dir(path)
-				.with_context(|| format!("failed to create {} directord: {}", p, path))
-				.unwrap(),
-		)
-	});
+	if let Err(e) = fs::create_dir_all(SRC_PATH).with_context(|| format!("failed to create input directory: {}", SRC_PATH)) {
+		errorln!(&e);
+		std::process::exit(1);
+	}
 
 	WalkDir::new(SRC_PATH)
 		.max_depth(1)
