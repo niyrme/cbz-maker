@@ -1,4 +1,6 @@
-#[derive(Debug, serde::Serialize)]
+use serde::ser::{Serialize, SerializeStruct, Serializer};
+
+#[derive(Debug)]
 pub struct Details {
 	title:        String,
 	author:       String,
@@ -35,6 +37,20 @@ impl Details {
 			title: title.to_string(),
 			..Default::default()
 		}
+	}
+}
+
+impl Serialize for Details {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		let mut s = serializer.serialize_struct("Details", 7)?;
+		s.serialize_field("title", &self.title)?;
+		s.serialize_field("author", &self.author)?;
+		s.serialize_field("artist", &self.artist)?;
+		s.serialize_field("description", &self.description)?;
+		s.serialize_field("genre", &self.genre)?;
+		s.serialize_field("status", &self.status)?;
+		s.serialize_field("_status values", &self.statusValues)?;
+		s.end()
 	}
 }
 
