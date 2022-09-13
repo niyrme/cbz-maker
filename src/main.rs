@@ -68,7 +68,8 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 
 		let entryOutCBZ = format!("{}/{} - {}.cbz", &entryOutPath, &entryName, &chapterName);
 
-		let zipF = File::create(&entryOutCBZ).with_context(|| format!("failed to create output CBZ file: {entryOutCBZ}"))?;
+		let zipF =
+			File::create(&entryOutCBZ).with_context(|| format!("failed to create output CBZ file: {entryOutCBZ}"))?;
 		let mut zipWriter = ZipWriter::new(zipF);
 
 		let pages: Vec<_> = iterPath(chapterPathStr, |entry| entry.path().is_file()).collect();
@@ -101,7 +102,9 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 			zipWriter
 				.start_file(&pageName, Default::default())
 				.with_context(|| format!("failed to start new zip file: {pageName}"))?;
-			zipWriter.write_all(&*buf).with_context(|| "failed to write to zip file")?;
+			zipWriter
+				.write_all(&buf)
+				.with_context(|| "failed to write to zip file")?;
 
 			buf.clear();
 		}
@@ -126,7 +129,7 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 			f.read_to_end(&mut buf)
 				.with_context(|| format!("failed to read file: {entryOutPath}/details.json"))?;
 			detailsF
-				.write_all(&mut buf)
+				.write_all(&buf)
 				.with_context(|| format!("failed to write file: {entryPathStr}/details.json"))?;
 			log!(format!("{} | Copied over details.json", &entryName));
 			Ok(())
@@ -153,7 +156,9 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 }
 
 async fn amain() {
-	if let Err(e) = fs::create_dir_all(SRC_PATH).with_context(|| format!("failed to create input directory: {}", SRC_PATH)) {
+	if let Err(e) =
+		fs::create_dir_all(SRC_PATH).with_context(|| format!("failed to create input directory: {}", SRC_PATH))
+	{
 		errorln!(&e);
 		std::process::exit(1);
 	}
@@ -180,13 +185,9 @@ async fn amain() {
 
 	for handle in handles {
 		match handle.join() {
-			Ok(res) => {
-				if let Err(e) = res {
-					errorln!(&e);
-				}
-			}
+			Ok(res) => drop(res.map_err(|e| errorln!(&e))),
 			Err(e) => todo!("{e:?}"),
-		}
+		};
 	}
 
 	log!("Done!");
