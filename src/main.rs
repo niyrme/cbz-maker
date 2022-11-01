@@ -1,4 +1,5 @@
 #![allow(non_snake_case)]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use std::{
 	fs::{self, File},
@@ -7,24 +8,16 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use cbzmaker::{errorln, log, Details};
-use futures::executor::block_on;
+use cbzmaker::{errorln, Details, Err};
+use eframe::NativeOptions;
 use walkdir::{DirEntry, WalkDir};
+use window::{isDir, ITEMS};
 use zip::ZipWriter;
 
-macro_rules! Err {
-	($msg:expr) => {
-		Err(anyhow::Error::new(std::io::Error::new(std::io::ErrorKind::Other, $msg)))
-	};
-	($msg:expr, $kind:expr) => {
-		Err(anyhow::Error::new(std::io::Error::new($kind, $msg)))
-	};
-}
+mod window;
 
 const SRC_PATH: &str = "./cbzMaker/src";
 const OUT_PATH: &str = "./cbzMaker/out";
-
-pub fn isDir(entry: &DirEntry) -> bool { entry.path().is_dir() }
 
 fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 	let iterPath = |path: &str, filter: fn(&DirEntry) -> bool| {
@@ -32,12 +25,7 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 			.max_depth(1)
 			.contents_first(false)
 			.into_iter()
-			.filter_map(|res| {
-				if res.is_err() {
-					errorln!(format!("{:?}", &res));
-				}
-				res.ok()
-			})
+			.filter_map(|res| res.ok())
 			.skip(1)
 			.filter(filter)
 	};
@@ -50,12 +38,18 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 		.get(SRC_PATH.len() + 1..)
 		.with_context(|| "failed to get entry name from path")?;
 
-	log!(format!("Creating: {}", entryName));
-
 	let entryOutPath = format!("{}/{}", OUT_PATH, &entryName);
 	fs::create_dir_all(&entryOutPath).with_context(|| format!("failed to create entry output path: {entryOutPath}"))?;
 
-	for chapter in iterPath(entryPathStr, isDir) {
+	let chapters: Vec<_> = iterPath(entryPathStr, isDir).collect();
+
+	let total = chapters.len() as f32;
+
+	unsafe {
+		ITEMS.insert(entryName.to_string(), (0.0, total));
+	}
+
+	for (idx, chapter) in chapters.iter().enumerate() {
 		let chapterPath = chapter.path();
 		let chapterPathStr = chapterPath
 			.to_str()
@@ -63,8 +57,6 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 		let chapterName = chapterPathStr
 			.get(entryPathStr.len() + 1..)
 			.with_context(|| "failed to get chapter name from path")?;
-
-		log!(&entryName, &chapterName);
 
 		let entryOutCBZ = format!("{}/{} - {}.cbz", &entryOutPath, &entryName, &chapterName);
 
@@ -77,7 +69,7 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 
 		let mut i = 0;
 
-		let mut buf = Vec::new();
+		let mut buf: Vec<u8> = Vec::new();
 
 		for page in pages.iter() {
 			let pagePath = page.path();
@@ -110,69 +102,55 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 		}
 
 		zipWriter.finish().with_context(|| "failed to finish zip file")?;
+
+		unsafe {
+			ITEMS.insert(entryName.to_string(), ((idx as f32) + 1.0, total));
+		}
 	}
 
 	// create .nomedia
-	// do not exit if this fails
-	if let Err(e) = File::create(format!("{}/.nomedia", &entryOutPath))
-		.with_context(|| format!("failed to create file: {entryOutPath}/.nomedia"))
-	{
-		eprintln!("{e}");
+	if let Err(e) = File::create(format!("{entryOutPath}/.nomedia")) {
+		eprintln!("failed to create file: {entryOutPath}/.nomedia: {e}");
 	}
 
-	let res = match (
-		File::create(format!("{}/details.json", &entryOutPath)),
-		File::open(format!("{}/details.json", &entryPathStr)),
+	if let Err(e) = fs::copy(
+		format!("{entryPathStr}/ComicInfo.xml"),
+		format!("{entryOutPath}/ComicInfo.xml"),
 	) {
-		(Ok(mut detailsF), Ok(mut f)) => {
-			let mut buf = Vec::new();
-			f.read_to_end(&mut buf)
-				.with_context(|| format!("failed to read file: {entryOutPath}/details.json"))?;
-			detailsF
-				.write_all(&buf)
-				.with_context(|| format!("failed to write file: {entryPathStr}/details.json"))?;
-			log!(format!("{} | Copied over details.json", &entryName));
-			Ok(())
-		}
-		(Ok(mut detailsF), Err(e)) if e.kind().eq(&io::ErrorKind::NotFound) => {
-			let details = Details::barebone(entryName);
-			detailsF
-				.write_all(
-					serde_json::to_string_pretty(&details)
-						.with_context(|| "failed to convert details to json")?
-						.as_bytes(),
-				)
-				.with_context(|| format!("failed to write file: {entryPathStr}/details.json"))?;
-			log!(format!("{} | Created new details.json", &entryName));
-			Ok(())
-		}
-		(Ok(_), Err(e)) => Err!(format!("{e}")),
-		(Err(e), _) => Err!(format!("{e}")),
-	};
+		eprintln!("Failed to copy ComicInfo.xml: {e}");
 
-	log!(format!("{} | Done!", &entryName));
+		if let Err(e) = File::create(format!("{entryOutPath}/.noxml")) {
+			eprintln!("failed to create file: {entryOutPath}.noxml: {e}");
+		}
+	}
 
-	res
+	if let Err(e) = fs::copy(
+		format!("{entryPathStr}/details.json"),
+		format!("{entryOutPath}/details.json"),
+	) {
+		if e.kind() == io::ErrorKind::NotFound {
+			File::create(format!("{entryOutPath}/details.json"))?
+				.write_all(serde_json::to_string_pretty(&Details::barebone(entryName))?.as_bytes())?;
+			Ok(())
+		} else {
+			Err(e.into())
+		}
+	} else {
+		Ok(())
+	}
 }
 
-async fn amain() {
-	if let Err(e) =
-		fs::create_dir_all(SRC_PATH).with_context(|| format!("failed to create input directory: {}", SRC_PATH))
-	{
+fn run() {
+	if let Err(e) = fs::create_dir_all(SRC_PATH) {
 		errorln!(&e);
-		std::process::exit(1);
+		return;
 	}
 
 	let entries: Vec<_> = WalkDir::new(SRC_PATH)
 		.max_depth(1)
 		.contents_first(false)
 		.into_iter()
-		.filter_map(|res| {
-			if let Err(e) = &res {
-				errorln!(format!("{e:?}"));
-			}
-			res.ok()
-		})
+		.filter_map(|res| res.ok())
 		.skip(1)
 		.filter(isDir)
 		.collect();
@@ -184,16 +162,22 @@ async fn amain() {
 	}
 
 	for handle in handles {
-		match handle.join() {
-			Ok(res) => drop(res.map_err(|e| errorln!(&e))),
-			Err(e) => todo!("{e:?}"),
-		};
+		if let Ok(res) = handle.join() {
+			if let Err(e) = res {
+				errorln!(e);
+			}
+		}
 	}
-
-	log!("Done!");
-
-	io::stdout().flush().unwrap();
-	io::stdin().read_line(&mut String::new()).unwrap();
 }
 
-fn main() { block_on(amain()) }
+fn main() {
+	eframe::run_native(
+		"CBZMaker",
+		NativeOptions::default(),
+		Box::new(|cctx| {
+			let t = thread::spawn(move || run());
+
+			Box::new(window::Window::new(cctx, t))
+		}),
+	);
+}

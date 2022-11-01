@@ -33,3 +33,13 @@ macro_rules! errorln {
 		cbzmaker::error!(format!("{}\n", $msg))
 	};
 }
+
+#[macro_export]
+macro_rules! Err {
+	($msg:expr) => {
+		Err(anyhow::Error::new(std::io::Error::new(std::io::ErrorKind::Other, $msg)))
+	};
+	($msg:expr, $kind:expr) => {
+		Err(anyhow::Error::new(std::io::Error::new($kind, $msg)))
+	};
+}
