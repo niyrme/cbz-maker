@@ -1,7 +1,4 @@
-use std::{
-	collections::BTreeMap,
-	thread::JoinHandle,
-};
+use std::{collections::BTreeMap, thread::JoinHandle};
 
 use egui::ProgressBar;
 use walkdir::DirEntry;

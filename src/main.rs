@@ -49,6 +49,8 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 		ITEMS.insert(entryName.to_string(), (0.0, total));
 	}
 
+	let mut noxml = true;
+
 	for (idx, chapter) in chapters.iter().enumerate() {
 		let chapterPath = chapter.path();
 		let chapterPathStr = chapterPath
@@ -66,6 +68,7 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 
 		let pages: Vec<_> = iterPath(chapterPathStr, |entry| entry.path().is_file()).collect();
 		let pageCount = pages.len();
+		let padWidth = pageCount.to_string().len();
 
 		let mut i = 0;
 
@@ -73,13 +76,7 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 
 		for page in pages.iter() {
 			let pagePath = page.path();
-
-			i += 1;
-
-			let pageExt = pagePath
-				.extension()
-				.and_then(|e| e.to_str())
-				.with_context(|| format!("failed to get extension from file: {pagePath:?}"))?;
+			let pageName = page.file_name().to_str().with_context(|| "")?;
 
 			File::open(pagePath)
 				.with_context(|| format!("failed to open chapter page: {pagePath:?}"))?
@@ -90,7 +87,22 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 				return Err!("something went wrong, buffer is empty");
 			}
 
-			let pageName = format!("{:0width$}.{ext}", i, width = pageCount, ext = pageExt);
+			if pageName == "ComicInfo.xml" {
+				noxml = false;
+				zipWriter.start_file("ComicInfo.xml", Default::default())?;
+				zipWriter.write_all(&buf)?;
+				buf.clear();
+				continue;
+			}
+
+			i += 1;
+
+			let pageExt = pagePath
+				.extension()
+				.and_then(|e| e.to_str())
+				.with_context(|| format!("failed to get extension from file: {pagePath:?}"))?;
+
+			let pageName = format!("{:0width$}.{pageExt}", i, width = padWidth);
 			zipWriter
 				.start_file(&pageName, Default::default())
 				.with_context(|| format!("failed to start new zip file: {pageName}"))?;
@@ -113,14 +125,9 @@ fn makeCBZ(dirEntry: DirEntry) -> Result<()> {
 		eprintln!("failed to create file: {entryOutPath}/.nomedia: {e}");
 	}
 
-	if let Err(e) = fs::copy(
-		format!("{entryPathStr}/ComicInfo.xml"),
-		format!("{entryOutPath}/ComicInfo.xml"),
-	) {
-		eprintln!("Failed to copy ComicInfo.xml: {e}");
-
+	if noxml {
 		if let Err(e) = File::create(format!("{entryOutPath}/.noxml")) {
-			eprintln!("failed to create file: {entryOutPath}.noxml: {e}");
+			errorln!(e);
 		}
 	}
 
